@@ -1,11 +1,14 @@
 package org.demo.test.config;
 
+import com.alibaba.druid.pool.DruidDataSource;
 import io.shardingsphere.core.api.ShardingDataSourceFactory;
 import io.shardingsphere.jdbc.spring.boot.sharding.SpringBootShardingRuleConfigurationProperties;
+import org.apache.ibatis.plugin.Interceptor;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -19,6 +22,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.util.ObjectUtils;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -26,6 +30,7 @@ import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.stream.Stream;
 
 /**
@@ -35,7 +40,7 @@ import java.util.stream.Stream;
 
 @AutoConfigureAfter(CommonConfig.class)
 @Configuration
-@MapperScan(basePackages = "com.zhongfeng.test.persistence.mapper.ds0", sqlSessionTemplateRef = "db0SqlSessionTemplate")
+@MapperScan(basePackages = "org.demo.test.persistence.mapper.ds0", sqlSessionTemplateRef = "db0SqlSessionTemplate")
 @EnableConfigurationProperties({SpringBootShardingRuleConfigurationProperties.class})
 public class DataSource0Config {
 
@@ -46,20 +51,57 @@ public class DataSource0Config {
 
     private Environment environment;
 
-    public DataSource0Config(Environment environment, PathMatchingResourcePatternResolver resolver) {
+    @Autowired
+    private DataSource0Properties dataSource0Properties;
+
+    private Interceptor[] interceptors;
+
+    public DataSource0Config(Environment environment, PathMatchingResourcePatternResolver resolver, ObjectProvider<Interceptor[]> interceptorsProvider) {
         this.environment = environment;
         this.resolver = resolver;
+        this.interceptors = interceptorsProvider.getIfAvailable();
     }
 
     @Bean(name = "ds0DataSource")
-    @ConfigurationProperties(prefix = "spring.datasource.ds0")
-    public DataSource ds0DataSource() {
-        return DataSourceBuilder.create().build();
+    @ConfigurationProperties(prefix = "spring.datasource.ds")
+    public DataSource ds0DataSource() throws Exception {
+        DataSource ds0DataSource = getDataSource();
+        return ds0DataSource;
     }
 
-    @Bean(name = "sharding0DataSource")
+    public DataSource getDataSource() throws Exception {
+        DruidDataSource result = new DruidDataSource();
+        result.setDriverClassName(dataSource0Properties.getDriverClassName());
+        result.setUrl(dataSource0Properties.getJdbcURL());
+        result.setUsername(dataSource0Properties.getUsername());
+        result.setPassword(dataSource0Properties.getPassword());
+        result.setInitialSize(dataSource0Properties.getInitialSize());
+        result.setMinIdle(dataSource0Properties.getMinIdle());
+        result.setMaxActive(dataSource0Properties.getMaxActive());
+        result.setMaxWait(dataSource0Properties.getMaxWait());
+        result.setTimeBetweenEvictionRunsMillis(dataSource0Properties.getTimeBetweenEvictionRunsMillis());
+        result.setValidationQuery(dataSource0Properties.getValidationQuery());
+        result.setTestWhileIdle(dataSource0Properties.getTestWhileIdle());
+        result.setTestOnBorrow(dataSource0Properties.getTestOnBorrow());
+        result.setTestOnReturn(dataSource0Properties.getTestOnReturn());
+        result.setPoolPreparedStatements(dataSource0Properties.getPoolPreparedStatements());
+        result.setMaxPoolPreparedStatementPerConnectionSize(dataSource0Properties.getMaxPoolPreparedStatementPerConnectionSize());
+        result.setFilters(dataSource0Properties.getFilters());
+        String[] split = dataSource0Properties.getConnectionProperties().split(";");
+        Properties properties = new Properties();
+        for (String src : split) {
+            String key = src.substring(1, src.indexOf('='));
+            String value = src.substring(src.indexOf('=') + 1);
+            properties.setProperty(key, value);
+        }
+        result.setConnectProperties(properties);
+        result.init();
+        return result;
+    }
+
+    @Bean(name = "shardingDataSource")
     @Primary
-    public DataSource sharding0DataSource() throws SQLException {
+    public DataSource shardingDataSource() throws Exception {
         Map<String, DataSource> dataSourceMap = new LinkedHashMap<>();
         dataSourceMap.put("ds0", ds0DataSource());
         return ShardingDataSourceFactory.createDataSource(dataSourceMap, shardingProperties.getShardingRuleConfiguration(), shardingProperties.getConfigMap(), shardingProperties.getProps());
@@ -69,7 +111,7 @@ public class DataSource0Config {
     @Bean(name = "db0TransactionManager")
     @Primary
     public DataSourceTransactionManager db0TransactionManager() throws Exception {
-        return new DataSourceTransactionManager(sharding0DataSource());
+        return new DataSourceTransactionManager(shardingDataSource());
 
     }
 
@@ -77,10 +119,14 @@ public class DataSource0Config {
     @Primary
     public SqlSessionFactory ds0SqlSessionFactory() throws Exception {
         SqlSessionFactoryBean bean = new SqlSessionFactoryBean();
-        bean.setDataSource(sharding0DataSource());
-        bean.setConfigLocation( new ClassPathResource(environment.getProperty("mybatis.config-location")));
-        bean.setMapperLocations(resolveMapperLocations(environment.getProperty("sharding.jdbc.ds0.mapper-locations").split(",")));
+        bean.setDataSource(shardingDataSource());
+        bean.setConfigLocation(new ClassPathResource(environment.getProperty("mybatis.config-location")));
+        if (!ObjectUtils.isEmpty(this.interceptors)) {
+            bean.setPlugins(this.interceptors);
+        }
+        bean.setMapperLocations(resolveMapperLocations(environment.getProperty("mybatis.mapper-locations").split(",")));
         return bean.getObject();
+
     }
 
 
